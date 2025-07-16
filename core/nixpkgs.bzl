@@ -589,7 +589,30 @@ def _nixpkgs_package_impl(repository_ctx):
         extra_msg = "See: https://nixos.org/nix/",
     )
 
+    nix_state_args = _get_nix_state_args(repository_ctx)
+    expr_args.extend(nix_state_args)
+
     _nixpkgs_build_and_symlink(repository_ctx, [nix_build_path], expr_args, build_file_content)
+
+def _get_nix_state_args(repository_ctx):
+    """
+    Get Nix state using OS-appropriate commands.
+    """
+    nix_state_args = []
+
+    nix_store_path = "/nix/store"
+    if repository_ctx.path(nix_store_path).exists:
+        # macOS and Linux have different options for `stat` (i.e. BSD vs GNU)
+        format_flag = "-f" if repository_ctx.os.name == "mac os x" else "-c"
+
+        result = repository_ctx.execute(["stat", format_flag, "%d:%i", nix_store_path])
+        if result.return_code == 0:
+            nix_state_args.extend([
+                "--argstr", "nixStoreInode", result.stdout.strip()
+            ])
+
+    return nix_state_args
+
 
 _nixpkgs_package = repository_rule(
     implementation = _nixpkgs_package_impl,

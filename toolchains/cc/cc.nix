@@ -10,6 +10,9 @@
   ccLang ? "c++",
   ccStd ? "c++0x",
   appleSDKPath ? "apple-sdk",
+
+  # Cache invalidation parameter
+  nixStoreInode ? "",
 }:
 
 let
@@ -126,6 +129,8 @@ pkgs.runCommand "bazel-${cc.orignalName or cc.name}-toolchain"
     # Pointless to do this on a remote machine.
     preferLocalBuild = true;
     allowSubstitutes = false;
+
+    NIX_STORE_INODE = "${nixStoreInode}";
   }
   ''
     # This constructs the substitutions for
