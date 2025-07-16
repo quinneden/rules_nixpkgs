@@ -129,8 +129,27 @@ def _nixpkgs_cc_toolchain_config_impl(repository_ctx):
     darwin = cpu_value == "darwin" or cpu_value == "darwin_arm64" or cpu_value == "darwin_x86_64"
 
     cc_toolchain_info_file = repository_ctx.path(repository_ctx.attr.cc_toolchain_info)
-    if not cc_toolchain_info_file.exists and not repository_ctx.attr.fail_not_supported:
-        return
+
+    if not cc_toolchain_info_file.exists:
+        if not repository_ctx.attr.fail_not_supported:
+            return
+
+        nix_store_exists = repository_ctx.path("/nix/store").exists
+        if nix_store_exists:
+            fail(
+                "CC toolchain configuration file is missing: {}\n\n".format(cc_toolchain_info_file) +
+                "This usually happens after Nix reinstallation. The underlying Nix derivation that\n" +
+                "generated this file may no longer exist in the Nix store.\n\n" +
+                "To fix this, run:\n" +
+                "  bazel clean --expunge\n\n" +
+                "Then retry your build."
+            )
+        else:
+            fail("CC toolchain configuration file is missing and Nix is not installed.")
+
+    _validate_cc_toolchain_nix_paths(repository_ctx, cc_toolchain_info_file)
+
+
     info = _parse_cc_toolchain_info(
         repository_ctx.read(cc_toolchain_info_file),
         cc_toolchain_info_file,
@@ -232,6 +251,34 @@ def _nixpkgs_cc_toolchain_config_impl(repository_ctx):
             "%{conly_flags}": get_starlark_list(info.conly_flags),
         },
     )
+
+def _validate_cc_toolchain_nix_paths(repository_ctx, cc_toolchain_info_file):
+    """
+    Validate that Nix store paths referenced in CC_TOOLCHAIN_INFO still exist.
+    """
+    content = repository_ctx.read(cc_toolchain_info_file)
+
+    nix_store_paths = []
+    for line in content.splitlines():
+        if line.startswith("TOOL_PATHS:"):
+            # TOOL_PATHS line format: "TOOL_PATHS:/nix/store/..."
+            paths = line.split(":")[1:]
+            for path in paths:
+                if path.startswith("/nix/store/") and path:
+                    nix_store_paths.append(path)
+                    break
+
+    for path in nix_store_paths[:3]:
+        if not repository_ctx.path(path).exists:
+            fail(
+                "CC toolchain references Nix store paths that no longer exist:\n" +
+                "  Missing: {}\n\n".format(path) +
+                "This usually happens after Nix reinstallation. The cached toolchain configuration\n" +
+                "references store paths that are no longer valid.\n\n" +
+                "To fix this, please run:\n" +
+                "  bazel clean --expunge\n\n" +
+                "Then retry your build."
+            )
 
 _nixpkgs_cc_toolchain_config = repository_rule(
     _nixpkgs_cc_toolchain_config_impl,
@@ -458,7 +505,7 @@ def nixpkgs_cc_configure(
             "ccStd",
             cc_std,
         ])
-    
+
     if apple_sdk_path:
         nixopts.extend(["--argstr", "appleSDKPath", apple_sdk_path])
 
