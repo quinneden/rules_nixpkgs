@@ -436,16 +436,13 @@ def _track_nix_store_inode(repository_ctx):
         return
 
     inode_cache_file = ".nix-store-inode"
-    cache_needs_update = False
+    cache_needs_update = True
 
     # Check if the cache file exists and if the inode has changed
     if repository_ctx.path(inode_cache_file).exists:
         cache_file_content = repository_ctx.read(inode_cache_file).strip()
-        if cache_file_content != nix_store_inode:
-            repository_ctx.report_progress(
-                "Nix store inode changed: {} -> {}".format(cache_file_content, nix_store_inode)
-            )
-            cache_needs_update = True
+        if cache_file_content == nix_store_inode:
+            cache_needs_update = False
 
     # Update cache file if needed
     if cache_needs_update:
