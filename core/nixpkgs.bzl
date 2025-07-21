@@ -402,6 +402,7 @@ def _get_nix_store_inode(repository_ctx):
 
     stat_path = repository_ctx.which("stat")
     if not stat_path:
+        repository_ctx.report_progress("DEBUG: stat command not found in PATH")
         return None
 
     # Determine whether we're using BSD stat (macOS) or GNU stat (Linux)
@@ -414,14 +415,21 @@ def _get_nix_store_inode(repository_ctx):
     else:
         stat_args = ["-c", "%i", nix_store_path]
 
+    repository_ctx.report_progress("DEBUG: Running stat with args: {}".format(stat_args))
     exec_result_inode = repository_ctx.execute([stat_path] + stat_args)
     if exec_result_inode.return_code != 0:
+        repository_ctx.report_progress("DEBUG: stat command failed with return code {}: {}".format(
+            exec_result_inode.return_code, exec_result_inode.stderr
+        ))
         return None
 
     if not exec_result_inode.stdout.isdigit():
+        repository_ctx.report_progress("DEBUG: stat output is not a digit: '{}'".format(exec_result_inode.stdout))
         return None
 
-    return exec_result_inode.stdout.strip()
+    inode = exec_result_inode.stdout.strip()
+    repository_ctx.report_progress("DEBUG: Successfully got inode: {}".format(inode))
+    return inode
 
 def _track_nix_store_inode(repository_ctx):
     """Track /nix/store directory as a Bazel dependency using inode tracking.
@@ -430,10 +438,14 @@ def _track_nix_store_inode(repository_ctx):
     When the inode changes (e.g. when Nix is reinstalled), the cache file is updated
     and Bazel invalidates the repository and re-runs it.
     """
+    repository_ctx.report_progress("DEBUG: Starting inode tracking")
     nix_store_inode = _get_nix_store_inode(repository_ctx)
 
     if nix_store_inode == None:
+        repository_ctx.report_progress("DEBUG: Inode tracking skipped - could not get inode")
         return
+
+    repository_ctx.report_progress("DEBUG: Got inode: {}".format(nix_store_inode))
 
     inode_cache_file = ".nix-store-inode"
     cache_needs_update = True
@@ -442,13 +454,17 @@ def _track_nix_store_inode(repository_ctx):
     if repository_ctx.path(inode_cache_file).exists:
         cache_file_content = repository_ctx.read(inode_cache_file).strip()
         if cache_file_content == nix_store_inode:
+            repository_ctx.report_progress("DEBUG: Cache file doesn't need update, inode is unchanged")
             cache_needs_update = False
 
     # Update cache file if needed
     if cache_needs_update:
+        repository_ctx.report_progress("DEBUG: Creating/updating cache file")
         repository_ctx.file(inode_cache_file, content = nix_store_inode)
 
+    repository_ctx.report_progress("DEBUG: Watching cache file: {}".format(inode_cache_file))
     repository_ctx.watch(inode_cache_file)
+    repository_ctx.report_progress("DEBUG: Inode tracking completed")
 
 def _nixpkgs_build_and_symlink(repository_ctx, nix_build_cmd, expr_args, build_file_content):
     # Large enough integer that Bazel can still parse. We don't have
