@@ -396,6 +396,63 @@ def _nixpkgs_build_file_content(repository_ctx):
     else:
         return None
 
+def _get_nix_store_inode(repository_ctx):
+    """Get the inode of /nix/store directory."""
+    nix_store_path = "/nix/store"
+
+    stat_path = repository_ctx.which("stat")
+    if not stat_path:
+        return None
+
+    # Determine whether we're using BSD stat (macOS) or GNU stat (Linux)
+    # BSD doesn't support the `--version` flag
+    exec_result_version = repository_ctx.execute([stat_path, "--version"], quiet=True)
+    is_bsd_stat = exec_result_version.return_code != 0
+
+    if is_bsd_stat:
+        stat_args = ["-f", "%i", nix_store_path]
+    else:
+        stat_args = ["-c", "%i", nix_store_path]
+
+    exec_result_inode = repository_ctx.execute([stat_path] + stat_args)
+    if exec_result_inode.return_code != 0:
+        return None
+
+    if not exec_result_inode.stdout.isdigit():
+        return None
+
+    return exec_result_inode.stdout.strip()
+
+def _track_nix_store_inode(repository_ctx):
+    """Track /nix/store directory as a Bazel dependency using inode tracking.
+
+    This creates a cache file containing the /nix/store inode and watches that file.
+    When the inode changes (e.g. when Nix is reinstalled), the cache file is updated
+    and Bazel invalidates the repository and re-runs it.
+    """
+    nix_store_inode = _get_nix_store_inode(repository_ctx)
+
+    if nix_store_inode == None:
+        return
+
+    inode_cache_file = ".nix-store-inode"
+    cache_needs_update = False
+
+    # Check if the cache file exists and if the inode has changed
+    if repository_ctx.path(inode_cache_file).exists:
+        cache_file_content = repository_ctx.read(inode_cache_file).strip()
+        if cache_file_content != nix_store_inode:
+            repository_ctx.report_progress(
+                "Nix store inode changed: {} -> {}".format(cache_file_content, nix_store_inode)
+            )
+            cache_needs_update = True
+
+    # Update cache file if needed
+    if cache_needs_update:
+        repository_ctx.file(inode_cache_file, content = nix_store_inode)
+
+    repository_ctx.watch(inode_cache_file)
+
 def _nixpkgs_build_and_symlink(repository_ctx, nix_build_cmd, expr_args, build_file_content):
     # Large enough integer that Bazel can still parse. We don't have
     # access to MAX_INT and 0 is not a valid timeout so this is as good
@@ -485,6 +542,10 @@ def _nixpkgs_build_and_symlink(repository_ctx, nix_build_cmd, expr_args, build_f
         fail("One of 'build_file' or 'build_file_content' was specified but Nix derivation already contains 'BUILD' or 'BUILD.bazel'.")
 
 def _nixpkgs_package_impl(repository_ctx):
+    # Track /nix/store directory as a Bazel dependency
+    # This ensures Bazel re-runs this repository rule if Nix is reinstalled
+    _track_nix_store_inode(repository_ctx)
+
     repository = repository_ctx.attr.repository
     repositories = repository_ctx.attr.repositories
 
@@ -726,6 +787,10 @@ def nixpkgs_package(
     _nixpkgs_package(**kwargs)
 
 def _nixpkgs_flake_package_impl(repository_ctx):
+    # Track /nix/store directory as a Bazel dependency
+    # This ensures Bazel re-runs this repository rule if Nix is reinstalled
+    _track_nix_store_inode(repository_ctx)
+
     # Workaround to bazelbuild/bazel#4533 -- to prevent this rule being restarted after running cp,
     # resolve all dependencies of this rule before running cp
     #
